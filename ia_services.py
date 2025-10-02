@@ -1,11 +1,13 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict
-import whisper
-import tempfile
+from vosk import Model, KaldiRecognizer
+import json
 import os
-import spacy
 import re
+import spacy
+import tempfile
+import whisper
 
 app = FastAPI(title="Microservicio de Transcripción")
 
@@ -41,6 +43,32 @@ async def transcribir_audio(audio: UploadFile = File(...)):
     #print(f"/tmp/{audio.filename}")
     result = model.transcribe(f"/tmp/{audio.filename}")
     return {"texto": result["text"]}
+
+'''
+    Stream to Text
+'''
+@app.websocket("/stream")
+async def websocket_endpoint(ws: WebSocket):
+    await ws.accept()
+    #rec = KaldiRecognizer(model, 16000)  # Vosk espera 16kHz
+
+    try:
+        model = Model("vosk-model-small-es-0.42")
+        rec = KaldiRecognizer(model, 16000)  # 16kHz
+        while True:
+            # dentro de tu WebSocket:
+            pcm_bytes = await ws.receive_bytes()
+
+            if rec.AcceptWaveform(pcm_bytes):
+                result = json.loads(rec.Result())
+                await ws.send_text(result["text"])
+            else:
+                partial = json.loads(rec.PartialResult())
+                await ws.send_text(partial["partial"])
+                #await ws.send_text("[...] " + partial["partial"])
+    except Exception as e:
+        print(e)
+        await ws.close()
 
 '''
     Extracción de datos del texto de la denuncia
@@ -210,6 +238,7 @@ def extract_address(texto: str) -> List[Dict]:
     
         #print(f"   CONTEXTO_VALIDO: {resultado['contexto_valido']}")
     print(f"   CONFIANZA: {resultado['confianza']:.2f}")
+
 def analisis_gramatical_detallado(texto: str):
     """
     Análisis gramatical detallado usando spaCy
